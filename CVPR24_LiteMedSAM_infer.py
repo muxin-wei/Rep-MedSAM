@@ -9,7 +9,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from segment_anything.modeling import MaskDecoder, PromptEncoder, TwoWayTransformer
-from tiny_vit_sam import TinyViT
 from matplotlib import pyplot as plt
 import cv2
 import argparse
@@ -17,8 +16,9 @@ from collections import OrderedDict
 import pandas as pd
 from datetime import datetime
 from repvit import RepViT
-from repvit_cfgs import repvit_L_cfgs, repvit_m1_5_cfgs, repvit_m1_0_cfgs
-
+from timm.models import create_model
+from repvit_cfgs import repvit_m1_0_cfgs
+from utils import replace_batchnorm
 
 #%% set seeds
 torch.set_float32_matmul_precision('high')
@@ -40,13 +40,13 @@ parser.add_argument(
     '-o',
     '--output_dir',
     type=str,
-    default='imgs/val',
+    default='val_seg/finetune4',
     help='directory to save the prediction',
 )
 parser.add_argument(
     '-lite_medsam_checkpoint_path',
     type=str,
-    default="workdir/finetune/finetune_weights.pth",
+    default="weights/rep_medsam.pth",
     help='path to the checkpoint of MedSAM-Lite',
 )
 parser.add_argument(
@@ -56,7 +56,7 @@ parser.add_argument(
     help='device to run the inference',
 )
 parser.add_argument(
-    '-num_workers',
+    '-num_workers', 
     type=int,
     default=4,
     help='number of workers for inference with multiprocessing',
@@ -324,7 +324,7 @@ def medsam_inference(medsam_model, img_embed, box_256, new_size, original_size):
 from timm.models import create_model
 
 medsam_lite_image_encoder = RepViT(cfgs= repvit_m1_0_cfgs)
- 
+
 medsam_lite_prompt_encoder = PromptEncoder(
     embed_dim=256,
     image_embedding_size=(64, 64),
@@ -353,6 +353,7 @@ medsam_lite_model = MedSAM_Lite(
 
 lite_medsam_checkpoint = torch.load(lite_medsam_checkpoint_path, map_location='cpu')
 medsam_lite_model.load_state_dict(lite_medsam_checkpoint)
+replace_batchnorm(medsam_lite_model.image_encoder)
 medsam_lite_model.to(device)
 medsam_lite_model.eval()
 
@@ -425,7 +426,8 @@ def MedSAM_infer_npz_3D(img_npz_file):
         z_middle = int((z_max - z_min)/2 + z_min)
 
         # infer from middle slice to the z_max
-        for z in range(z_middle, z_max):
+        # print(npz_name, 'infer from middle slice to the z_max')
+        for z in range(z_middle, z_max+1):
             img_2d = img_3D[z, :, :]
             if len(img_2d.shape) == 2:
                 img_3c = np.repeat(img_2d[:, :, None], 3, axis=-1) # create a 2d slice with 3 repeated channels
@@ -450,9 +452,9 @@ def MedSAM_infer_npz_3D(img_npz_file):
             if z == z_middle:
                 box_256 = resize_box_to_256(mid_slice_bbox_2d, original_size=(H, W)) # resize bbox
             else:
-                pre_seg = segs[z-1, :, :]
-                if np.max(pre_seg) > 0:
-                    pre_seg256 = resize_longest_side(pre_seg)
+                pre_seg = segs_3d_temp[z-1, :, :]
+                pre_seg256 = resize_longest_side(pre_seg)
+                if np.max(pre_seg256) > 0:
                     pre_seg256 = pad_image(pre_seg256)
                     box_256 = get_bbox256(pre_seg256)
                 else:
@@ -462,6 +464,7 @@ def MedSAM_infer_npz_3D(img_npz_file):
         
         # infer from middle slice to the z_max
         # print(npz_name, 'infer from middle slice to the z_min')
+        zmin = max(0, z_min-1)
         for z in range(z_middle-1, z_min, -1):
             img_2d = img_3D[z, :, :]
             if len(img_2d.shape) == 2:
@@ -484,15 +487,13 @@ def MedSAM_infer_npz_3D(img_npz_file):
             with torch.no_grad():
                 image_embedding = medsam_lite_model.image_encoder(img_256_tensor) # (1, 256, 64, 64)
 
-            pre_seg = segs[z+1, :, :]
-            if np.max(pre_seg) > 0: 
-                pre_seg256 = resize_longest_side(pre_seg)
+            pre_seg = segs_3d_temp[z+1, :, :]
+            pre_seg256 = resize_longest_side(pre_seg)
+            if np.max(pre_seg256) > 0:
                 pre_seg256 = pad_image(pre_seg256)
                 box_256 = get_bbox256(pre_seg256)
-            else: # no roi
-                scale_256 = 256 / max(H, W) 
-                box_256 = mid_slice_bbox_2d * scale_256
-                
+            else:
+                box_256 = resize_box_to_256(mid_slice_bbox_2d, original_size=(H, W))
             img_2d_seg, iou_pred = medsam_inference(medsam_lite_model, image_embedding, box_256, [new_H, new_W], [H, W])
             segs_3d_temp[z, img_2d_seg>0] = idx
         segs[segs_3d_temp>0] = idx
@@ -524,21 +525,13 @@ def MedSAM_infer_npz_3D(img_npz_file):
         plt.savefig(join(png_save_dir, npz_name.split(".")[0] + '.png'), dpi=300)
         plt.close()
 
-def validate(model, val_root):
-    val_set = sorted(glob(join(val_root, '*.npz'), recursive=True))
-    for img_npz_file in tqdm(val_set):
-    start_time = time()
-    if basename(img_npz_file).startswith('3D'):
-        MedSAM_infer_npz_3D(img_npz_file)
-    else:
-        MedSAM_infer_npz_2D(img_npz_file)
 
 if __name__ == '__main__':
     img_npz_files = sorted(glob(join(data_root, '*.npz'), recursive=True))
     efficiency = OrderedDict()
     efficiency['case'] = []
     efficiency['time'] = []
-    for img_npz_file in tqdm(img_npz_files):
+    for img_npz_file in tqdm(img_npz_files[:]):
         start_time = time()
         if basename(img_npz_file).startswith('3D'):
             MedSAM_infer_npz_3D(img_npz_file)

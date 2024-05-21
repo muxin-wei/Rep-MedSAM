@@ -12,7 +12,7 @@ from torch.nn import functional as F
 from typing import List, Tuple, Type
 
 from .common import LayerNorm2d
-
+device = torch.device('cuda:0')
 
 class MaskDecoder(nn.Module):
     def __init__(
@@ -137,7 +137,8 @@ class MaskDecoder(nn.Module):
         else:
             src = image_embeddings
         src = src + dense_prompt_embeddings
-        pos_src = torch.repeat_interleave(image_pe, tokens.shape[0], dim=0)
+        # print(type(torch.repeat_interleave(image_pe, int(tokens.shape[0]), dim=0)))
+        pos_src = torch.repeat_interleave(image_pe, int(tokens.shape[0]), dim=0)
         b, c, h, w = src.shape
 
         # Run the transformer

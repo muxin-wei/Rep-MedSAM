@@ -25,45 +25,40 @@ from sklearn.model_selection import KFold
 from math import nan
 from matplotlib import pyplot as plt
 import argparse
-import torch.multiprocessing as mp
-from CVPR24_LiteMedSAM_infer import validate
-
+import torchvision.transforms.v2.functional as aug
+from torchvision.transforms import v2
 
 # %%
 
-parser = argparse.ArgumentParser()
+parser = argparse.ArgumentParser(add_help=False)
 # npy data root
 parser.add_argument(
-    "-data_root", type=str, default="/cvpr-data/train_npy/",
+    "-data_root", type=str, default="/mnt/others",
     help="Path to the npy data root."
 )
 parser.add_argument(
-    "-data_root_1", type=str, default='/train_ct/train_npy/'
+    "-data_root_1", type=str, default='/train_ct/finetune/'
 )
-
 parser.add_argument(
-    '-data_root_2',type=str, default='/mnt/others/'
+    '-data_root_2',type=str, default=None
 )
 # pre-trained checkpoint
 parser.add_argument(
     "-pretrained_checkpoint", type=str, default="workdir/finetune/finetune_weights.pth",
     help="Path to the pretrained RepViT-SAM checkpoint."
 )
-
 parser.add_argument(
     "-resume", type=str, default='',
     help="Path to the checkpoint to continue training."
 )
-
 parser.add_argument(
-    "-work_dir", type=str, default="./workdir/finetune/",
+    "-work_dir", type=str, default="./workdir/refine/",
     help="Path to the working directory where checkpoints and logs will be saved."
 )
 parser.add_argument(
     "-num_epochs", type=int, default=20,
     help="Number of epochs to train."
 )
-
 parser.add_argument(
     "-batch_size", type=int, default=16,
     help="Batch size."
@@ -81,7 +76,7 @@ parser.add_argument(
     help="Perturbation to bounding box coordinates during training."
 )
 parser.add_argument(
-    "-lr", type=float, default=5E-4,
+    "-lr", type=float, default=1E-4,
     help="Learning rate."
 )
 parser.add_argument(
@@ -89,11 +84,11 @@ parser.add_argument(
     help="Weight decay."
 )
 parser.add_argument(
-    "-iou_loss_weight", type=float, default=0.85,
+    "-iou_loss_weight", type=float, default=1,
     help="Weight of IoU loss."
 )
 parser.add_argument(
-    "-seg_loss_weight", type=float, default=1.15,
+    "-seg_loss_weight", type=float, default=1,
     help="Weight of segmentation loss."
 )
 parser.add_argument(
@@ -180,9 +175,11 @@ def _get_grad_norm(model):
     return total_norm 
 
 
+transforms = v2.ColorJitter(brightness=.4, contrast=.5, saturation=.4, hue= .2)
+
 # %%
 class NpyDataset(Dataset): 
-    def __init__(self, data_root, image_size=256, bbox_shift=5, data_aug=True):
+    def __init__(self, data_root,image_size=256, bbox_shift=5, data_aug=True):
         self.data_root = data_root
         self.gt_path_files = []
         for root in self.data_root:
@@ -197,7 +194,7 @@ class NpyDataset(Dataset):
         
         self.image_size = image_size
         self.target_length = image_size
-        self.bbox_shift = args.bbox_shift
+        self.bbox_shift = bbox_shift
         self.data_aug = data_aug
     
     def __len__(self):
@@ -218,25 +215,33 @@ class NpyDataset(Dataset):
             ), 'image should be normalized to [0, 1]'
         
         gt = np.load(self.gt_path_files[index], 'r', allow_pickle=True) # multiple labels [0, 1,4,5...], (256,256)
+        if len(gt.shape) > 2:
+            gt_slice_idx = random.randint(0, gt.shape[0] - 1)
+            gt = gt[gt_slice_idx,:,:]
+        assert gt.shape == (256, 256), f'gt shape (256, 256) expected, but got {gt.shape} instead'
         label_ids = np.unique(gt)[1:]
         try:
             gt2D = np.uint8(gt == random.choice(label_ids.tolist())) # only one label, (256, 256)
         except:
             print(img_name, 'label_ids.tolist()', label_ids.tolist())
             gt2D = np.uint8(gt == np.max(gt)) # only one label, (256, 256)
-
-        # add data augmentation: random fliplr and random flipud
-        if self.data_aug:
-            if random.random() > 0.5:
-                img_256 = np.ascontiguousarray(np.flip(img_256, axis=-1))
-                gt2D = np.ascontiguousarray(np.flip(gt2D, axis=-1))
-                # print('DA with flip left right')
-            if random.random() > 0.5:
-                img_256 = np.ascontiguousarray(np.flip(img_256, axis=-2))
-                gt2D = np.ascontiguousarray(np.flip(gt2D, axis=-2))
-                # print('DA with flip upside down')
-                
         gt2D = np.uint8(gt2D > 0)
+        img_256 = torch.tensor(img_256).float()
+        gt2D = torch.tensor(gt2D[np.newaxis,:]).long()
+        if self.data_aug:
+            img_256 = transforms(img_256)
+            if random.random() > .3:
+                img_256 = aug.horizontal_flip_image_tensor(img_256)
+                gt2D = aug.horizontal_flip_mask(gt2D)
+            if random.random() > .3:
+                img_256 = aug.vertical_flip_image_tensor(img_256)
+                gt2D = aug.vertical_flip_mask(gt2D)
+        gt2D = gt2D.squeeze(0)
+        assert len(gt2D.shape) == 2, f"gt for {img_name} is not 2D"
+        assert (
+            torch.max(gt2D)<=1.0 and torch.min(gt2D)>=0.0
+            ), f'mask {img_name} should be normalized to [0, 1]'
+        # assert max(gt2)
         y_indices, x_indices = np.where(gt2D > 0)
         x_min, x_max = np.min(x_indices), np.max(x_indices)
         y_min, y_max = np.min(y_indices), np.max(y_indices)
@@ -248,11 +253,15 @@ class NpyDataset(Dataset):
         y_max = min(H, y_max + random.randint(0, self.bbox_shift))
         bboxes = np.array([x_min, y_min, x_max, y_max])
         
+        # bboxes
+
+        # bboxes = torch.tensor(bboxes[None,None, ...]).float()
+
         return {
             "ori_image":img_3c,
-            "image": torch.tensor(img_256).float(),
-            "gt2D": torch.tensor(gt2D[None, :,:]).long(),
-            "bboxes": torch.tensor(bboxes[None, None, ...]).float(), # (B, 1, 4)
+            "image": img_256,
+            "gt2D": gt2D[None, :,:],
+            "bboxes": torch.tensor(bboxes[None,None, ...]).long(), # (B, 1, 4)
             "image_name": img_name,
             "new_size": torch.tensor(np.array([img_256.shape[0], img_256.shape[1]])).long(),
             "original_size": torch.tensor(np.array([img_3c.shape[0], img_3c.shape[1]])).long(),
@@ -288,11 +297,18 @@ class NpyDataset(Dataset):
 
 
 #%% sanity test of dataset class
-
+data_root = []
+if args.data_root is not None:
+    data_root.append(args.data_root)
+if args.data_root_1 is not None:
+    data_root.append(args.data_root_1)
+if args.data_root_2 is not None:
+    data_root.append(args.data_root_2)
+    
 if do_sancheck:
-    tr_dataset = NpyDataset(args.data_root, data_aug=True)
+    tr_dataset = NpyDataset(data_root, data_aug=True)
     tr_dataloader = DataLoader(tr_dataset, batch_size=8, shuffle=True)
-    for step, batch in enumerate(tr_dataloader):
+    for step, batch in enumerate(tqdm(tr_dataloader)):
         # show the example
         _, axs = plt.subplots(1, 2, figsize=(10, 10))
         idx = random.randint(0, 4)
@@ -322,7 +338,6 @@ if do_sancheck:
             dpi=300
         )
         plt.close()
-        break
 
 # %% MedSAM_Lite Module Design
 class MedSAM_Lite(nn.Module):
@@ -481,13 +496,6 @@ def main():
         mse_loss = nn.MSELoss(reduction='mean')
         
     # %%
-    data_root = []
-    if args.data_root is not None:
-        data_root.append(args.data_root)
-    if args.data_root_1 is not None:
-        data_root.append(args.data_root_1)
-    if args.data_root_2 is not None:
-        data_root.append(args.data_root_2)
     train_dataset = NpyDataset(data_root=data_root, data_aug=True) 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
     if args.resume and isfile(args.resume):
@@ -497,6 +505,7 @@ def main():
         optimizer.load_state_dict(checkpoint["optimizer"])
         start_epoch = checkpoint["epoch"]
         best_loss = checkpoint["loss"]
+        lr_scheduler.optimizer = optimizer
         print(f"Loaded checkpoint from epoch {start_epoch}")
     else:
         start_epoch = 0
@@ -540,13 +549,14 @@ def main():
             l_seg = seg_loss(logits_pred, gt2D)
             l_ce = ce_loss(logits_pred, gt2D.float())
             #mask_loss = l_seg + l_ce
-            mask_loss = args.seg_loss_weight * l_seg + args.ce_loss_weight * l_ce
+            mask_loss = l_seg * l_seg + l_ce * l_ce
             
             iou_gt = cal_iou(torch.sigmoid(logits_pred) > 0.5, gt2D.bool())
             l_iou = iou_loss(iou_pred, iou_gt)
             #loss = mask_loss + l_iou
-            loss = mask_loss + args.iou_loss_weight * l_iou
-            
+            loss = mask_loss + l_iou * l_iou
+            if torch.isnan(loss):
+                print(mask_loss.item(), l_iou.item())
             if args.distillation:
                 l_mse = mse_loss(embeddings_pred, embeddings)
                 loss = l_mse * args.mse_loss_weight
@@ -568,8 +578,6 @@ def main():
         iou_epoch_loss_reduced = sum(iou_epoch_loss) / len(epoch_loss)
         mask_epoch_loss_reduced = sum(mask_epoch_loss) / len(epoch_loss)
         
-        
-        
         if args.use_wandb:
             wandb.log({"epoch_loss": epoch_loss_reduced})
             wandb.log({"mask loss": mask_epoch_loss_reduced})
@@ -586,7 +594,7 @@ def main():
             "loss": epoch_loss_reduced,
             "best_loss": best_loss,
         }
-        torch.save(checkpoint, join(args.work_dir, f"medsam_lite_{epoch}.pth"))
+        torch.save(checkpoint, join(args.work_dir, f"medsam_lite_{str(epoch)}.pth"))
         if epoch_loss_reduced < best_loss:
             print(f"New best loss: {best_loss:.4f} -> {epoch_loss_reduced:.4f}")
             best_loss = epoch_loss_reduced

@@ -29,9 +29,9 @@ from collections import OrderedDict
 import pandas as pd
 
 parser = argparse.ArgumentParser('Segmentation efficiency eavluation for docker containers', add_help=False)
-parser.add_argument('-i', '--test_img_path', default='./test_demo/', type=str, help='testing data path')
-parser.add_argument('-o','--save_path', default='./demo_seg', type=str, help='segmentation output path')
-parser.add_argument('-d','--docker_folder_path', default='./skippinglegday.tar.gz', type=str, help='team docker path')
+parser.add_argument('-i', '--test_img_path', default='./imgs/', type=str, help='testing data path')
+parser.add_argument('-o','--save_path', default='./val_seg/skippinglegday', type=str, help='segmentation output path')
+parser.add_argument('-d','--docker_folder_path', default='./dockers', type=str, help='team docker path')
 args = parser.parse_args()
 
 test_img_path = args.test_img_path

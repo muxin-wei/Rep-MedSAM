@@ -8,8 +8,11 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 from matplotlib import pyplot as plt
-
+import torchvision.transforms.v2.functional as aug
+from torchvision.transforms import v2
 import cv2
+# from torchvision import models, datasets, tv_tensors
+import PIL.Image
 
 
 #%%
@@ -29,10 +32,13 @@ def show_box(box, ax):
     ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor='blue', facecolor=(0,0,0,0), lw=2))
     # showing bbox with blue and transparent edge  on image, width = 2px
 
+#%%
+
+transforms = v2.ColorJitter(brightness=.4, contrast=.5, saturation=.4, hue= .2)
 
 #%%
 class NpyDataset(Dataset): 
-    def __init__(self, data_root, image_size=256, bbox_shift=5, data_aug=True):
+    def __init__(self, data_root,image_size=256, bbox_shift=5, data_aug=True):
         self.data_root = data_root
         self.gt_path_files = []
         for root in self.data_root:
@@ -44,7 +50,7 @@ class NpyDataset(Dataset):
                 if isfile(join(img_path, basename(file)))
             ]
             self.gt_path_files.extend(gt_files)
-            
+        
         self.image_size = image_size
         self.target_length = image_size
         self.bbox_shift = bbox_shift
@@ -61,31 +67,40 @@ class NpyDataset(Dataset):
         # convert the shape to (3, H, W)
         img_256 = np.transpose(img_3c, (2, 0, 1)) # (3, 256, 256)
         assert (
+            img_256.shape[1] == 256 and img_256.shape[2] == 256
+        ), f'image {img_name} shape should be 256'
+        assert (
             np.max(img_256)<=1.0 and np.min(img_256)>=0.0
             ), 'image should be normalized to [0, 1]'
         
-        gt = np.load(self.gt_path_files[index], 'r', allow_pickle=True) 
-        # multiple labels [0, 1,4,5...], (256,256)
-
+        gt = np.load(self.gt_path_files[index], 'r', allow_pickle=True) # multiple labels [0, 1,4,5...], (256,256)
+        if len(gt.shape) > 2:
+            gt_slice_idx = random.randint(0, gt.shape[0] - 1)
+            gt = gt[gt_slice_idx,:,:]
+        assert gt.shape == (256, 256), f'gt shape (256, 256) expected, but got {gt.shape} instead'
         label_ids = np.unique(gt)[1:]
         try:
             gt2D = np.uint8(gt == random.choice(label_ids.tolist())) # only one label, (256, 256)
         except:
             print(img_name, 'label_ids.tolist()', label_ids.tolist())
             gt2D = np.uint8(gt == np.max(gt)) # only one label, (256, 256)
-
-        # add data augmentation: random fliplr and random flipud
-        if self.data_aug:
-            if random.random() > 0.5:
-                img_256 = np.ascontiguousarray(np.flip(img_256, axis=-1))
-                gt2D = np.ascontiguousarray(np.flip(gt2D, axis=-1))
-                # print('DA with flip left right')
-            if random.random() > 0.5:
-                img_256 = np.ascontiguousarray(np.flip(img_256, axis=-2))
-                gt2D = np.ascontiguousarray(np.flip(gt2D, axis=-2))
-                # print('DA with flip upside down')
-                
         gt2D = np.uint8(gt2D > 0)
+        img_256 = torch.tensor(img_256).float()
+        gt2D = torch.tensor(gt2D[np.newaxis,:]).long()
+        if self.data_aug:
+            img_256 = transforms(img_256)
+            if random.random() > .3:
+                img_256 = aug.horizontal_flip_image_tensor(img_256)
+                gt2D = aug.horizontal_flip_mask(gt2D)
+            if random.random() > .3:
+                img_256 = aug.vertical_flip_image_tensor(img_256)
+                gt2D = aug.vertical_flip_mask(gt2D)
+        gt2D = gt2D.squeeze(0)
+        assert len(gt2D.shape) == 2, f"gt for {img_name} is not 2D"
+        assert (
+            torch.max(gt2D)<=1.0 and torch.min(gt2D)>=0.0
+            ), f'mask {img_name} should be normalized to [0, 1]'
+        # assert max(gt2)
         y_indices, x_indices = np.where(gt2D > 0)
         x_min, x_max = np.min(x_indices), np.max(x_indices)
         y_min, y_max = np.min(y_indices), np.max(y_indices)
@@ -96,11 +111,16 @@ class NpyDataset(Dataset):
         y_min = max(0, y_min - random.randint(0, self.bbox_shift))
         y_max = min(H, y_max + random.randint(0, self.bbox_shift))
         bboxes = np.array([x_min, y_min, x_max, y_max])
+        
+        # bboxes
+
+        # bboxes = torch.tensor(bboxes[None,None, ...]).float()
 
         return {
-            "image": torch.tensor(img_256).float(),
-            "gt2D": torch.tensor(gt2D[None, :,:]).long(),
-            "bboxes": torch.tensor(bboxes[None, None, ...]).float(), # (B, 1, 4)
+            "ori_image":img_3c,
+            "image": img_256,
+            "gt2D": gt2D[None, :,:],
+            "bboxes": torch.tensor(bboxes[None,None, ...]).float(), # (B, 1, 4)
             "image_name": img_name,
             "new_size": torch.tensor(np.array([img_256.shape[0], img_256.shape[1]])).long(),
             "original_size": torch.tensor(np.array([img_3c.shape[0], img_3c.shape[1]])).long(),
@@ -135,20 +155,44 @@ class NpyDataset(Dataset):
         return image_padded
 
 
-
 #%% 
-data_root=['/mnt/train_npy', '/cvpr-data/train_npy', '/train_ct/train_npy']
+batch_size = 48
+data_root=['/train_ct/CT-Organs']
 tr_dataset = NpyDataset(data_root, data_aug=True)
-tr_dataloader = DataLoader(tr_dataset, batch_size=32, shuffle=True, num_workers = 12)
-
+tr_dataloader = DataLoader(tr_dataset, batch_size=batch_size, shuffle=True, num_workers = 12)
 #%%
 for step, batch in enumerate(tqdm(tr_dataloader)):
     # show the example
+    _, axs = plt.subplots(1, 2, figsize=(10, 10))
+    idx = random.randint(0, 6)
 
     image = batch["image"]
     gt = batch["gt2D"]
     bboxes = batch["bboxes"]
     names_temp = batch["image_name"]
 
+    axs[0].imshow(image[idx].cpu().permute(1,2,0).numpy())
+    show_mask(gt[idx].cpu().squeeze().numpy(), axs[0])
+    show_box(bboxes[idx].numpy().squeeze(), axs[0])
+    axs[0].axis('off')
+    # set title
+    axs[0].set_title(names_temp[idx])
+    idx = random.randint(6, 11)
+    axs[1].imshow(image[idx].cpu().permute(1,2,0).numpy())
+    show_mask(gt[idx].cpu().squeeze().numpy(), axs[1])
+    show_box(bboxes[idx].numpy().squeeze(), axs[1])
+    axs[1].axis('off')
+    # set title
+    axs[1].set_title(names_temp[idx])
+    plt.subplots_adjust(wspace=0.01, hspace=0)
+    plt.savefig(
+        join('workdir/sanity_check', 'medsam_lite-train_bbox_prompt_sanitycheck_DA.png'),
+        bbox_inches='tight',
+        dpi=300
+    )
+    plt.close()
+    if step == 2:
+        continue
+        # break
 
 # %%

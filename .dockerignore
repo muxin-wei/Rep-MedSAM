@@ -7,3 +7,9 @@
 test_demo/**/*
 imgs/*
 val_seg/*
+workdir/*
+wandb/*
+*.ipynb
+*.tar.gz
+dockers/
+teacher/

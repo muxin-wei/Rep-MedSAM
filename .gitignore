@@ -18,6 +18,9 @@ test_demo/
 *.tar.gz
 teacher/
 .vscode/
+dockers/
+inputs/
+weights/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -98,6 +101,8 @@ target/
 
 # Jupyter Notebook
 .ipynb_checkpoints
+*.ipynb
+.dockerignore
 
 # IPython
 profile_default/

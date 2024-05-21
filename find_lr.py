@@ -420,7 +420,7 @@ class LRFinder(object):
                 l_ce = self.ce_loss(logits_pred, gt2D.float())
                 iou_gt = cal_iou(torch.sigmoid(logits_pred) > 0.5, gt2D.bool())
                 l_iou = self.iou_loss(iou_pred, iou_gt)
-                loss = l_ce + l_seg + l_iou
+                loss = l_ce * l_ce + l_seg * l_seg + l_iou * l_iou
 
             # Loss should be averaged in each step
             loss /= accumulation_steps
