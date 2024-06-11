@@ -1,7 +1,6 @@
 *.pyc
 # Project specific
 *.DS_Store
-*.pth
 *.nii.gz
 *.nii
 *.npy
@@ -21,6 +20,7 @@ teacher/
 dockers/
 inputs/
 weights/
+teacher_model/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
