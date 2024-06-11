@@ -26,21 +26,15 @@ from math import nan
 from matplotlib import pyplot as plt
 import argparse
 import torchvision.transforms.v2.functional as aug
-from torchvision.transforms import v2
+from torchvision.transforms import v2   
 
 # %%
 
 parser = argparse.ArgumentParser(add_help=False)
 # npy data root
 parser.add_argument(
-    "-data_root", type=str, default="/mnt/others",
+    "-data_root", type=str, default="/mnt/train",
     help="Path to the npy data root."
-)
-parser.add_argument(
-    "-data_root_1", type=str, default='/train_ct/finetune/'
-)
-parser.add_argument(
-    '-data_root_2',type=str, default=None
 )
 # pre-trained checkpoint
 parser.add_argument(
@@ -52,7 +46,7 @@ parser.add_argument(
     help="Path to the checkpoint to continue training."
 )
 parser.add_argument(
-    "-work_dir", type=str, default="./workdir/refine/",
+    "-work_dir", type=str, default="./workdir/finetune/",
     help="Path to the working directory where checkpoints and logs will be saved."
 )
 parser.add_argument(
@@ -104,14 +98,20 @@ parser.add_argument(
     help="Enable distillation"
 )
 parser.add_argument(
-    "-teacher", type=str, default=None
+    "-mask_decoder", type=str, default="teacher_model/mask_decoder.pth",
+    help="mask decoder for pretraining distillation"
+)
+parser.add_argument(
+    "-prompt_encoder", type=str, default="teacher_model/prompt_encoder.pth",
+    help="prompt encoder for decoupled distillation"
 )
 parser.add_argument(
     "-mse_loss_weight", type=float, default=1.0,
     help="Weight of mean squared error for distillation"
 )
 parser.add_argument(
-    "-use_wandb", type=bool, default=False, help="use wandb to monitor training"
+    "-use_wandb", type=bool, default=False, 
+    help="use wandb to monitor training"
 )
 parser.add_argument(
     "-embedding_path", type=str, default=None
@@ -120,10 +120,6 @@ parser.add_argument(
     '-find_lr', type=bool, default=False,
     help='find lr for training'
 )
-parser.add_argument(
-    "-val_root", type=str, default='imgs/'
-)
-
 args = parser.parse_args()
 # %%
 
@@ -449,26 +445,11 @@ def main():
             print(f"Pretained weights {args.pretrained_checkpoint} not found, training from scratch")
 
     if args.distillation:
+        medsam_lite_model.mask_decoder.load_state_dict(torch.load(args.mask_decoder), strict=True)
+        medsam_lite_model.prompt_encoder.load_state_dict(torch.load(args.prompt_encoder), strict=True)
         medsam_lite_model.mask_decoder.requires_grad_(False)
         medsam_lite_prompt_encoder.requires_grad_(False)
-        med_enc = ImageEncoderViT(
-            depth=12,
-            embed_dim=768,
-            img_size=1024,
-            mlp_ratio=4,
-            norm_layer=partial(torch.nn.LayerNorm, eps=1e-6),
-            num_heads=12,
-            patch_size=16,
-            qkv_bias=True,
-            use_rel_pos=True,
-            global_attn_indexes=[2, 5, 8, 11],
-            window_size=14,
-            out_chans=256,
-        ).to(device=device)
-        med_enc.load_state_dict(torch.load(args.teacher))
-        med_enc.eval()
-        print(f"MedSAM Image Encoder size:{sum(p.numel() for p in med_enc.parameters())}")
-
+        
     medsam_lite_model = medsam_lite_model.to(device)
     medsam_lite_model.train()
         
@@ -614,21 +595,6 @@ def main():
         plt.ylabel("Loss")
         plt.savefig(join(args.work_dir, "train_loss.png"))
         plt.close()
-        
-        plt.plot(iou_losses)
-        plt.title("IoU Loss")
-        plt.xlabel("Epoch")
-        plt.ylabel("Loss")
-        plt.savefig(join(args.work_dir, "iou_loss.png"))
-        
-        plt.close()
-        plt.plot(mask_losses)
-        plt.title("Mask Loss")
-        plt.xlabel("Epoch")
-        plt.ylabel("Loss")
-        plt.savefig(join(args.work_dir, "mask_loss.png"))
-        plt.close()
-
 
 if __name__ == "__main__":
     main()

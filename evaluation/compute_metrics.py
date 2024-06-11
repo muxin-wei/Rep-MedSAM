@@ -13,7 +13,9 @@ import argparse
 
 def compute_multi_class_dsc(gt, seg):
     dsc = []
-    for i in range(1, gt.max()+1):
+    unique_labels = np.unique(gt)
+    mask_labels = unique_labels[unique_labels>0]
+    for i in mask_labels:
         gt_i = gt == i
         seg_i = seg == i
         dsc.append(compute_dice_coefficient(gt_i, seg_i))
@@ -21,7 +23,9 @@ def compute_multi_class_dsc(gt, seg):
 
 def compute_multi_class_nsd(gt, seg, spacing, tolerance=2.0):
     nsd = []
-    for i in range(1, gt.max()+1):
+    unique_labels = np.unique(gt)
+    mask_labels = unique_labels[unique_labels>0]
+    for i in mask_labels:
         gt_i = gt == i
         seg_i = seg == i
         surface_distance = compute_surface_distances(
@@ -34,14 +38,14 @@ def compute_multi_class_nsd(gt, seg, spacing, tolerance=2.0):
 parser = argparse.ArgumentParser()
 parser.add_argument('-s', '--seg_dir', default='test_demo/segs', type=str)
 parser.add_argument('-g', '--gt_dir', default='test_demo/gts', type=str)
-parser.add_argument('-csv_dir', default='test_demo/metrics.csv', type=str)
+parser.add_argument('-csv_dir', default='test_demo', type=str)
 parser.add_argument('-num_workers', type=int, default=8)
 parser.add_argument('-nsd', default=True, type=bool, help='set it to False to disable NSD computation and save time')
 args = parser.parse_args()
 
 seg_dir = args.seg_dir
 gt_dir = args.gt_dir
-csv_dir = args.seg_dir.split('/')[-2] + '/metrics.csv'
+csv_dir =join(args.csv_dir ,'metrics.csv') 
 num_workers = args.num_workers
 compute_NSD = args.nsd
 

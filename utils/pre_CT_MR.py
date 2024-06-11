@@ -14,14 +14,14 @@ import cc3d
 
 # convert nii image to npz files, including original image and corresponding masks
 modality = "CT"
-anatomy = "Abd"  # anantomy + dataset name
-img_name_suffix = "_0000.nii.gz"
+anatomy = "throx"  # anantomy + dataset name
+img_name_suffix = ".nii.gz"
 gt_name_suffix = ".nii.gz"
 prefix = modality + "_" + anatomy + "_"
 
-nii_path = "/mnt/FLARE22Train/images"  # path to the nii images
-gt_path = "/mnt/FLARE22Train/labels"  # path to the ground truth
-npy_path = "/mnt/FLARE22Train/all" + prefix[:-1]
+nii_path = "D:\CVPR24-Challenge\paper_example\CT\imgs"  # path to the nii images
+gt_path = "D:\CVPR24-Challenge\paper_example\CT\gts"  # path to the ground truth
+npy_path = "D:\CVPR24-Challenge\paper_example\CT" + prefix[:-1]
 os.makedirs(join(npy_path, "gts"), exist_ok=True)
 os.makedirs(join(npy_path, "imgs"), exist_ok=True)
 
@@ -46,7 +46,7 @@ tumor_id = None  # only set this when there are multiple tumors; convert semanti
 # set window level and width
 # https://radiopaedia.org/articles/windowing-ct
 WINDOW_LEVEL = 40  # only for CT images
-WINDOW_WIDTH = 400  # only for CT images
+WINDOW_WIDTH = 1500  # only for CT images
 
 # %% save preprocessed images and masks as npz files
 for name in tqdm(names[:40]):  # use the remaining 10 cases for validation

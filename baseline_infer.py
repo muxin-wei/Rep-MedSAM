@@ -19,8 +19,7 @@ from repvit import RepViT
 from timm.models import create_model
 from repvit_cfgs import repvit_m1_0_cfgs
 from utils import replace_batchnorm
-from time import time
-
+from tiny_vit_sam import TinyViT
 #%% set seeds
 torch.set_float32_matmul_precision('high')
 torch.manual_seed(2024)
@@ -64,14 +63,14 @@ parser.add_argument(
 )
 parser.add_argument(
     '--save_overlay', 
-    default=True,
+    default=False,
     action='store_true',
     help='whether to save the overlay image'
 )
 parser.add_argument(
     '-png_save_dir',
     type=str,
-    default='./paper_example/overlay',
+    default='./overlay',
     help='directory to save the overlay image'
 )
 
@@ -360,8 +359,6 @@ medsam_lite_model.eval()
 
 def MedSAM_infer_npz_2D(img_npz_file):
     npz_name = basename(img_npz_file)
-    npz_gt = join('paper_example/us/gts', npz_name)
-    gt_data = np.load(npz_gt, 'r', allow_pickle=True)
     npz_data = np.load(img_npz_file, 'r', allow_pickle=True) # (H, W, 3)
     img_3c = npz_data['imgs'] # (H, W, 3)
     assert np.max(img_3c)<256, f'input data should be in range [0, 255], but got {np.unique(img_3c)}'
@@ -379,21 +376,14 @@ def MedSAM_infer_npz_2D(img_npz_file):
     img_256_tensor = torch.tensor(img_256_padded).float().permute(2, 0, 1).unsqueeze(0).to(device)
     with torch.no_grad():
         image_embedding = medsam_lite_model.image_encoder(img_256_tensor)
-    mask_labels = np.unique(gt_data['gts'])
-    assert len(mask_labels) > 1, f'{npz_name} mask only zeros'
-    for idx, box in enumerate(boxes, start=1):
-        start_time_box_i = time()
-        box256 = resize_box_to_256(box, original_size=(H, W))
-        end_time_box_i = time()
-        print(f'box_{i} reshaped with time : {end_time_box_i -  start_time_box_i}')
-        box256 = box256[None, ...] # (1, 4)
-        start_time_infer_i = time()
-        medsam_mask, iou_pred = medsam_inference(medsam_lite_model, image_embedding, box256, (newh, neww), (H, W))
-        end_time_infer_i = time()
-        print(f'box_{i} infer with time : {end_time_infer_i -  start_time_infer_i}')
-        segs[medsam_mask>0] = mask_labels[idx]
-        # print(f'{npz_name}, box: {box}, predicted iou: {np.round(iou_pred.item(), 4)}')
 
+    for idx, box in enumerate(boxes, start=1):
+        box256 = resize_box_to_256(box, original_size=(H, W))
+        box256 = box256[None, ...] # (1, 4)
+        medsam_mask, iou_pred = medsam_inference(medsam_lite_model, image_embedding, box256, (newh, neww), (H, W))
+        segs[medsam_mask>0] = idx
+        # print(f'{npz_name}, box: {box}, predicted iou: {np.round(iou_pred.item(), 4)}')
+   
     np.savez_compressed(
         join(pred_save_dir, npz_name),
         segs=segs,
