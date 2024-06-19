@@ -84,3 +84,6 @@ python train_one_gpu.py \
         ├─embeddings
         ├─gts
         └─imgs
+
+### Acknowledgement
+We thank the authors of [bowang-lab/MedSAM](https://github.com/bowang-lab/MedSAM/tree/LiteMedSAM) and [THU-MIG/RepViT](https://github.com/THU-MIG/RepViT/tree/main/model) for making their source code publicly available.
