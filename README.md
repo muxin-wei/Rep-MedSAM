@@ -10,7 +10,7 @@ Built upon [bowang-lab/MedSAM](https://github.com/bowang-lab/MedSAM/tree/LiteMed
 Our distillation framework is shown as follows:
 <center>
 
-![alt text](example/framework.png)
+![distillation framework](framework.png)
 
 </center>
 
