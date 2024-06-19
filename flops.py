@@ -10,8 +10,9 @@ from repvit_cfgs import repvit_m1_0_cfgs
 from torchsummary import  summary
 from fvcore.nn import FlopCountAnalysis, parameter_count_table, flop_count
 from functools import partial
+from time import time
 from tiny_vit_sam import TinyViT
-
+#%%
 device = torch.device('cpu')
 
 #%%
@@ -50,7 +51,7 @@ medsam_lite_image_encoder = RepViT(repvit_m1_0_cfgs)
 medsam_image_encoder = ImageEncoderViT(
     depth=12,
     embed_dim=768,
-    img_size=1024,
+    img_size=256,
     mlp_ratio=4,
     norm_layer=partial(torch.nn.LayerNorm, eps=1e-6),
     num_heads=12,
@@ -127,11 +128,32 @@ tinysam = MedSAM_Lite(
 image = torch.rand(1, 3, 256, 256).to(device)
 boxes = torch.randint(low=0, high=256, size=(1, 1, 4)).to(device)
 #%%
-rep_medsam.eval()
-replace_batchnorm(rep_medsam)
-# flops = FlopCountAnalysis(model=rep_medsam, inputs= (image,bo ))
-# print(flops.total())
-print(f"size:{sum(p.numel() for p in rep_medsam.parameters())}")
-#32G FLOPs tiny sam inference with cpu for one image
-#29G FLOPs repmedsam
-#31G FLOPs 10570092
+medsam_lite_image_encoder.eval()
+replace_batchnorm(medsam_lite_image_encoder)
+
+start_vit = time()
+vit_out = medsam_image_encoder(image)
+end_vit = time()
+cost_vit = end_vit - start_vit
+print(f'vit time consume: {cost_vit}')
+
+start_tinyvit = time()
+tinyvit_out = tiny_medsam_lite_image_encoder(image)
+end_tinyvit = time()
+cost_tinyvit = end_tinyvit - start_tinyvit
+print(f'tinyvit time consume: {cost_tinyvit}')
+
+start_repvit = time()
+repvit_out = medsam_lite_image_encoder(image)
+end_repvit = time()
+cost_tinyvit = end_repvit - start_repvit
+print(f'rep-vit time consume: {cost_tinyvit}')
+
+tiny_flops = FlopCountAnalysis(model=tiny_medsam_lite_image_encoder, inputs= (image))
+print(tiny_flops.total())
+
+rep_flops = FlopCountAnalysis(model=medsam_lite_image_encoder, inputs= (image))
+print(rep_flops.total())
+
+
+# %%

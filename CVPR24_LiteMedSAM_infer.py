@@ -416,40 +416,46 @@ def MedSAM_infer_npz_3D(img_npz_file):
     img_3D = npz_data['imgs'] # (D, H, W)
     spacing = npz_data['spacing'] # not used in this demo because it treats each slice independently
     segs = np.zeros_like(img_3D, dtype=np.uint8) 
-    boxes_3D = npz_data['boxes'] # [[x_min, y_min, z_min, x_max, y_max, z_max]]
+    boxes_3D = npz_data['boxes'] # [[x_min, y_min, z_min, x_max, y_max, z_max]] 
+    min_z, max_z = np.min(boxes_3D[:, 2]), np.max(boxes_3D[:, -1]) # get z_min and z_max from all 3d boxes
+    assert min_z < max_z, f"z_min should be smaller than z_max, but got {min_z=} and {max_z=}"
 
+    embeddings = []
+
+    for z in range(0, img_3D.shape[0]+1):
+        if z < min_z or z > max_z:
+            embeddings.append(True)
+            continue
+        
+        img_2d = img_3D[z, :, :]
+        if len(img_2d.shape) == 2:
+            img_3c = np.repeat(img_2d[:, :, None], 3,axis= -1)
+        else:
+            img_3c = img_2d
+        
+        H, W, _ = img_3c.shape
+        img_256 = resize_longest_side(img_3c, 256)
+        new_H, new_W = img_256.shape[:2]
+        
+        img_256 = (img_256 - img_256.min()) / np.clip(
+            img_256.max() - img_256.min(), a_max=None, a_min=1e-8
+        )
+        img_256 =  pad_image(img_256)
+        
+        img_256_tensor = torch.tensor(img_256).float().permute(2, 0, 1).unsqueeze(0).to(device)
+        with torch.no_grad():
+                image_embedding = medsam_lite_model.image_encoder(img_256_tensor) # (1, 256, 64, 64)
+        embeddings.append(image_embedding) 
+    
     for idx, box3D in enumerate(boxes_3D, start=1):
         segs_3d_temp = np.zeros_like(img_3D, dtype=np.uint8) 
         x_min, y_min, z_min, x_max, y_max, z_max = box3D
         assert z_min < z_max, f"z_min should be smaller than z_max, but got {z_min=} and {z_max=}"
         mid_slice_bbox_2d = np.array([x_min, y_min, x_max, y_max])
         z_middle = int((z_max - z_min)/2 + z_min)
-
-        # infer from middle slice to the z_max
-        # print(npz_name, 'infer from middle slice to the z_max')
+        
         z_max = min(z_max+1, img_3D.shape[0])
         for z in range(z_middle, z_max):
-            img_2d = img_3D[z, :, :]
-            if len(img_2d.shape) == 2:
-                img_3c = np.repeat(img_2d[:, :, None], 3, axis=-1)
-            else:
-                img_3c = img_2d
-            H, W, _ = img_3c.shape
-
-            img_256 = resize_longest_side(img_3c, 256)
-            new_H, new_W = img_256.shape[:2]
-
-            img_256 = (img_256 - img_256.min()) / np.clip(
-                img_256.max() - img_256.min(), a_min=1e-8, a_max=None
-            )  # normalize to [0, 1], (H, W, 3)
-            ## Pad image to 256x256
-            img_256 = pad_image(img_256)
-            
-            # convert the shape to (3, H, W)
-            img_256_tensor = torch.tensor(img_256).float().permute(2, 0, 1).unsqueeze(0).to(device)
-            # get the image embedding
-            with torch.no_grad():
-                image_embedding = medsam_lite_model.image_encoder(img_256_tensor) # (1, 256, 64, 64)
             if z == z_middle:
                 box_256 = resize_box_to_256(mid_slice_bbox_2d, original_size=(H, W))
             else:
@@ -460,34 +466,11 @@ def MedSAM_infer_npz_3D(img_npz_file):
                     box_256 = get_bbox256(pre_seg256)
                 else:
                     box_256 = resize_box_to_256(mid_slice_bbox_2d, original_size=(H, W))
-            img_2d_seg, iou_pred = medsam_inference(medsam_lite_model, image_embedding, box_256, [new_H, new_W], [H, W])
+            img_2d_seg, iou_pred = medsam_inference(medsam_lite_model, embeddings[z], box_256, [new_H, new_W], [H, W])
             segs_3d_temp[z, img_2d_seg>0] = idx
-        
-        # infer from middle slice to the z_max
-        # print(npz_name, 'infer from middle slice to the z_min')
-        z_min = max(0, z_min-1)
+
+        z_min = max(-1, z_min-1)
         for z in range(z_middle-1, z_min, -1):
-            img_2d = img_3D[z, :, :]
-            if len(img_2d.shape) == 2:
-                img_3c = np.repeat(img_2d[:, :, None], 3, axis=-1)
-            else:
-                img_3c = img_2d
-            H, W, _ = img_3c.shape
-
-            img_256 = resize_longest_side(img_3c)
-            new_H, new_W = img_256.shape[:2]
-
-            img_256 = (img_256 - img_256.min()) / np.clip(
-                img_256.max() - img_256.min(), a_min=1e-8, a_max=None
-            )  # normalize to [0, 1], (H, W, 3)
-            ## Pad image to 256x256
-            img_256 = pad_image(img_256)
-
-            img_256_tensor = torch.tensor(img_256).float().permute(2, 0, 1).unsqueeze(0).to(device)
-            # get the image embedding
-            with torch.no_grad():
-                image_embedding = medsam_lite_model.image_encoder(img_256_tensor) # (1, 256, 64, 64)
-
             pre_seg = segs_3d_temp[z+1, :, :]
             pre_seg256 = resize_longest_side(pre_seg)
             if np.max(pre_seg256) > 0:
@@ -495,13 +478,15 @@ def MedSAM_infer_npz_3D(img_npz_file):
                 box_256 = get_bbox256(pre_seg256)
             else:
                 box_256 = resize_box_to_256(mid_slice_bbox_2d, original_size=(H, W))
-            img_2d_seg, iou_pred = medsam_inference(medsam_lite_model, image_embedding, box_256, [new_H, new_W], [H, W])
+            img_2d_seg, iou_pred = medsam_inference(medsam_lite_model, embeddings[z], box_256, [new_H, new_W], [H, W])
             segs_3d_temp[z, img_2d_seg>0] = idx
         segs[segs_3d_temp>0] = idx
     np.savez_compressed(
         join(pred_save_dir, npz_name),
         segs=segs,
-    )            
+    )
+    
+    del embeddings    
 
     # visualize image, mask and bounding box
     if save_overlay:
