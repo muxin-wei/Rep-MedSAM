@@ -26,7 +26,7 @@ $\bf{2.7\times}$ faster for the image encoder
 
 Model weight is available at [ckpts](./ckpts).
 
-We have updated our infer script for 3D volumes, and almost $ \bf{2 \times}$ faster than the original infer script!
+We have updated our infer script for 3D volumes, and almost $\bf{2 \times}$ faster than the original infer script!
 
 | Case ID                 |       Size      | Num. Objects | Baseline | Proposed |  Updated  |
 |-------------------------|:---------------:|:------------:|:--------:|:--------:|:---------:|
