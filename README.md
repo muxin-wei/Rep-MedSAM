@@ -1,9 +1,8 @@
-# Solution for CVPR 2024 MedSAM on Laptop Challenge
 
-**Rep-MedSAM: Towards Real-time and Universal Medical Image Segmentation** \
+# **Rep-MedSAM: Towards Real-time and Universal Medical Image Segmentation** 
 *Muxin Wei, Shuqing Chen, Silin Wu, Dabin Xu*
 
-
+Top 3 Solution for CVPR 2024 MedSAM on Laptop Challenge
 
 Built upon [bowang-lab/MedSAM](https://github.com/bowang-lab/MedSAM/tree/LiteMedSAM) and [THU-MIG/RepViT](https://github.com/THU-MIG/RepViT/tree/main/model). This repository provides the solution of our team for [CVPR 2024 MedSAM on Laptop Challenge](https://www.codabench.org/competitions/1847/#/pages-tab). Details of our method are described in our [paper]().
 
